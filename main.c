@@ -20,6 +20,9 @@
 int volatile keepRunning = 1;
 int volatile endSession = 0;
 
+// Temp var
+char *message = "asdfg";
+
 void SIGHandler(int);
 void terminateAllSessions();
 void terminateSession(char []);
@@ -34,6 +37,7 @@ int main(int argc, char *argv[]) {
 
     // input value holders
     char input_buffer[50];      // Using 50 char as default input length
+    char buffer[50];
     char host[50], port[50];
     int ret, sockfd, listen_sockfd;
     char *msg;
@@ -52,10 +56,10 @@ int main(int argc, char *argv[]) {
     FD_ZERO(&wfds);
     FD_ZERO(&rfds);
     FD_ZERO(&efds);
-    FD_SET(STDIN_FILENO, &rfds);
+    // FD_SET(STDIN_FILENO, &rfds);
     int retval;
     struct timeval timeout;
-    timeout.tv_sec = 5;
+    timeout.tv_sec = 3;
     timeout.tv_usec = 0;
 
     // Connection vars
@@ -71,8 +75,8 @@ int main(int argc, char *argv[]) {
 
     memset(&hint_local, '\0', sizeof hint);
     hint_local.ai_family = PF_UNSPEC;  // Either IPv4 of IPv6
-    hint.ai_socktype = SOCK_DGRAM;     // request for UDP 
-    hint.ai_flags = AI_PASSIVE;        // Use local ip address
+    hint_local.ai_socktype = SOCK_DGRAM;     // request for UDP 
+    hint_local.ai_flags = AI_PASSIVE;        // Use local ip address
 
     // Server init with input argv[1] (listening port)
     if ((ret = getaddrinfo(NULL, argv[1], &hint_local, &serverInfo))) {
@@ -88,7 +92,7 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        setToNonblocking(listen_sockfd);
+        // setToNonblocking(listen_sockfd);
 
         if (bind(listen_sockfd, p->ai_addr, p->ai_addrlen) == -1) {
             close(listen_sockfd);
@@ -104,8 +108,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    FD_SET(listen_sockfd, &rfds);
-    FD_SET(listen_sockfd, &efds);
+    // FD_SET(listen_sockfd, &rfds);
+    // FD_SET(listen_sockfd, &efds);
     freeaddrinfo(serverInfo);
     printf("Listening on port: %s\n", argv[1]);
 
@@ -125,16 +129,38 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
+        // FD_ZERO(&wfds);
+        // FD_ZERO(&rfds);
+        // FD_ZERO(&efds);
+        FD_SET(listen_sockfd, &rfds);
+        FD_SET(listen_sockfd, &efds);
+        FD_SET(STDIN_FILENO, &rfds);
+
+        printf("Socket fd value: %d\n", listen_sockfd);
+
+        // int rettemp = FD_ISSET(listen_sockfd, &rfds);
+        // printf("%d\n", rettemp);
+        // rettemp = FD_ISSET(listen_sockfd, &efds);
+        // printf("%d\n", rettemp);
+
         // Default prompt
-        printf("#chat with?: ");
+        printf("#chat with?: \n");
         // Polling from all avaliable inputs
-        retval = select(FD_SETSIZE, &wfds, &rfds, &efds, NULL);
+        retval = select(FD_SETSIZE, &rfds, NULL, NULL, NULL);
 
         if (retval == -1) {
             perror("select()");
             return 2;
+        } else if (retval == 0) {
+            printf("Select timed out!\n");
+            continue;
         } else if (FD_ISSET(STDIN_FILENO, &rfds)) {               // Case: stdin input
+            printf("A key was pressed!\n");
+            read(STDIN_FILENO, buffer, 50);
+            continue;
+            
             fgets(input_buffer, 50 , stdin);        // Read user input. Blocking until user finished with EOF
+            // fflush(stdin);
             // Analyze input
             // IPv4:port 
             if (!accept_req && !send_msg && (sscanf(input_buffer, "%[0-9.:] %[0-9]", host, port) == 2)) {     // Check if the format is host+port; not answering request or sending messages
@@ -167,23 +193,29 @@ int main(int argc, char *argv[]) {
 
                 // Send datagram via established socket
                 msg = serializeMsg(TYPE_REQUEST, NULL);
+                retval = setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
                 sendto(sockfd, msg, strlen(msg), 0, p->ai_addr, p->ai_addrlen);
+                
 
                 // We don't expect immediate return. So we leave it in select polling
-                if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+                // if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
                     reqCount++;
                     printf("Waiting for peer to accept connection... \n");
-                    FD_SET(sockfd, &wfds);
+                    FD_SET(sockfd, &rfds);
                     FD_SET(sockfd, &efds);
-                } else {
-                    connectionSuccess(p); 
-                }
+                // } else {
+                    // connectionSuccess(p); 
+                // }
 
 
             }
         } else if (FD_ISSET(listen_sockfd, &rfds)) {
+            printf("Something on the listening socket... \n");
+            // continue;
+
             // Deal with bad package
-            if (recvfrom(sockfd, buf, 50-1 , 0, (struct sockaddr *)&inc_addr, &addr_len) == -1){
+            if (recvfrom(listen_sockfd, buf, sizeof(buf), 0, (struct sockaddr *)&inc_addr, &addr_len) == -1){
                 perror("recvfrom");
                 continue;
             }
@@ -194,6 +226,7 @@ int main(int argc, char *argv[]) {
     }
 
     terminateAllSessions();
+    close(listen_sockfd);
     freeaddrinfo(res);
     return 0;
 }
@@ -221,7 +254,7 @@ void terminateSession(char str[]) {
 // Generate message (str) based on message type
 char *serializeMsg(int msg_type, char *msg) {
     // uint32_t 0;
-    return NULL;
+    return message;
 }
 
 // Save and monitor established connections
