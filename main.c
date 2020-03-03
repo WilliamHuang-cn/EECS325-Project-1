@@ -48,10 +48,10 @@ int setToNonblocking(int);
 int createSock(char *, char *, struct addrinfo *, struct addrinfo *, int *);
 int createSockAndBind(char *, char *, struct addrinfo *, struct addrinfo *, int *);
 
-int saveSession(struct session **s, int sockfd, struct addrinfo *addr, struct timeval *time);
-int removeSession(struct session **s, int sockfd);
-struct session *findSessionBySock(int sockfd);
-struct session *findSessionByHost(char *host, char *port);
+int saveSession(struct session **, int, struct addrinfo *, struct timeval *);
+int removeSession(struct session **, int);
+struct session *findSessionBySock(int);
+struct session *findSessionByHost(char *, char *);
 
 int main(int argc, char *argv[]) {
 
@@ -188,12 +188,18 @@ int main(int argc, char *argv[]) {
                 if (FD_ISSET(p->sockfd, &rfds)) {
                     // Incoming transmission on socket
                     if (p->status == REQUESTING && p->reqCount <= 3) {             // Hearing back from a connection request and retry
+                        // retryConnection();
                         continue;
                     }
                     if (p->status == REQUESTING && p->reqCount > 3) {             // Hearing back from a connection request and stop retry
+                        // connectionTimeout();
                         continue;
                     }
                     if (p->status == ESTABLISHED) {             // Getting a heart beat
+                        
+                        // TODO
+                        // 
+                        
                         continue;
                     }
                 }
@@ -311,5 +317,19 @@ int createSockAndBind(char *host, char *port, struct addrinfo *hint, struct addr
     }
 
     res = p;
+    return 0;
+}
+
+int saveSession(struct session **s, int sockfd, struct addrinfo *addr, struct timeval *time) {
+    return 0;
+}
+
+int removeSession(struct session **s, int sockfd) {
+    return 0;
+}
+struct session *findSessionBySock(int sockfd) {
+    return 0;
+}
+struct session *findSessionByHost(char *host, char *port) {
     return 0;
 }
