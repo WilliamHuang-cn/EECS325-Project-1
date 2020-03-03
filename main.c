@@ -16,6 +16,21 @@
 #define TYPE_MSG (2)
 #define TYPE_CLOSE (3)
 
+#define REQUESTING (0)
+#define ESTABLISHED (1)
+#define CLOSING (2)
+
+// Defines a linked list of saved sessions
+struct session {
+    int sockfd;
+    struct addrinfo *address;
+    struct timeval lastUpdated;
+    struct session *nextSession;
+    int reqCount;
+    int status;             // As defined above
+} *activeSessions, *requestedSession;
+
+
 // Flag controlling main loop
 int volatile keepRunning = 1;
 int volatile endSession = 0;
@@ -29,8 +44,12 @@ void terminateSession(char []);
 char *serializeMsg(int, char*);
 void connectionSuccess(struct addrinfo*);
 int setToNonblocking(int);
+
 int createSock(char *, char *, struct addrinfo *, struct addrinfo *, int *);
 int createSockAndBind(char *, char *, struct addrinfo *, struct addrinfo *, int *);
+
+int saveSession(struct session **s, int sockfd, struct addrinfo *addr, struct timeval *time);
+int removeSessionByAddr(struct session **s, char *host, char *port);
 
 int main(int argc, char *argv[]) {
 
@@ -96,6 +115,7 @@ int main(int argc, char *argv[]) {
             printf("You want to drop: %s", input_buffer);
 
             // TODO
+            // removeSessionByAddr();
 
             terminateSession(input_buffer);
             endSession = 0;
@@ -132,15 +152,17 @@ int main(int argc, char *argv[]) {
 
                 // TODO
                 // Assume for now making new connections
-                int i = createSock(host, port, &hint, res, &sockfd);
+
+                if((int i = createSock(host, port, &hint, res, &sockfd) != 0)) continue;
 
                 // Send datagram via established socket
                 msg = serializeMsg(TYPE_REQUEST, NULL);
-                retval = setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-
-                sendto(sockfd, msg, strlen(msg), 0, p->ai_addr, p->ai_addrlen);
-                
-                reqCount++;
+                if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
+                    perror("setsockopt():");
+                    continue;
+                }
+                sendto(sockfd, msg, strlen(msg), 0, res->ai_addr, res->ai_addrlen);
+                saveSession(&activeSessions, sockfd, res, NULL);
                 printf("Waiting for peer to accept connection... \n");
                 FD_SET(sockfd, &rfds);
                 FD_SET(sockfd, &efds);
@@ -228,6 +250,7 @@ int createSock(char *host, char *port, struct addrinfo *hint, struct addrinfo *r
         return 1;
     }
 
+    res = p;
     return 0;
 }
 
@@ -262,5 +285,7 @@ int createSockAndBind(char *host, char *port, struct addrinfo *hint, struct addr
         fprintf(stderr, "listener: failed to bind socket\n");
         return 1;
     }
+
+    res = p;
     return 0;
 }
