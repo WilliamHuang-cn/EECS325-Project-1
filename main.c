@@ -30,6 +30,7 @@ char *serializeMsg(int, char*);
 void connectionSuccess(struct addrinfo*);
 int setToNonblocking(int);
 int createSock(char *, char *, struct addrinfo *, struct addrinfo *, int *);
+int createSockAndBind(char *, char *, struct addrinfo *, struct addrinfo *, int *);
 
 int main(int argc, char *argv[]) {
 
@@ -80,32 +81,7 @@ int main(int argc, char *argv[]) {
     hint_local.ai_flags = AI_PASSIVE;        // Use local ip address
 
     // Server init with input argv[1] (listening port)
-    if ((ret = getaddrinfo(NULL, argv[1], &hint_local, &serverInfo))) {
-        printf("getaddrinfo: %s\n", gai_strerror(ret));
-        return 1;       // Quit program with error
-    }
-
-    for(p = serverInfo; p != NULL; p = p->ai_next) {
-        // Try to create socket for addrinfo. Note that the sockets are non-blocking 
-        if ((listen_sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
-            perror("listener: socket");
-            printf("Cannot create socket for host. \n");
-            continue;
-        }
-
-        if (bind(listen_sockfd, p->ai_addr, p->ai_addrlen) == -1) {
-            close(listen_sockfd);
-            perror("listener: bind");
-            printf("Cannot bind socket to port. \n");
-            continue;
-        }
-        break;
-    }
-
-    if (p == NULL) {
-        fprintf(stderr, "listener: failed to bind socket\n");
-        return 1;
-    }
+    createSockAndBind(NULL, argv[1], &hint_local, serverInfo, &listen_sockfd);
 
     freeaddrinfo(serverInfo);
     printf("Listening on port: %s\n", argv[1]);
@@ -252,5 +228,39 @@ int createSock(char *host, char *port, struct addrinfo *hint, struct addrinfo *r
         return 1;
     }
 
+    return 0;
+}
+
+// Creates a socket and binds to port. 
+int createSockAndBind(char *host, char *port, struct addrinfo *hint, struct addrinfo *res, int *sockfd) {
+    
+    int ret;
+    struct addrinfo *p;
+    if ((ret = getaddrinfo(host, port, hint, &res))) {
+        printf("getaddrinfo: %s\n", gai_strerror(ret));
+        return 1;       // Quit program with error
+    }
+
+    for(p = res; p != NULL; p = p->ai_next) {
+        // Try to create socket for addrinfo. Note that the sockets are non-blocking 
+        if ((*sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
+            perror("listener: socket");
+            printf("Cannot create socket for host. \n");
+            continue;
+        }
+
+        if (bind(*sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+            close(*sockfd);
+            perror("listener: bind");
+            printf("Cannot bind socket to port. \n");
+            continue;
+        }
+        break;
+    }
+
+    if (p == NULL) {
+        fprintf(stderr, "listener: failed to bind socket\n");
+        return 1;
+    }
     return 0;
 }
