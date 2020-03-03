@@ -92,8 +92,6 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        // setToNonblocking(listen_sockfd);
-
         if (bind(listen_sockfd, p->ai_addr, p->ai_addrlen) == -1) {
             close(listen_sockfd);
             perror("listener: bind");
@@ -108,8 +106,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // FD_SET(listen_sockfd, &rfds);
-    // FD_SET(listen_sockfd, &efds);
     freeaddrinfo(serverInfo);
     printf("Listening on port: %s\n", argv[1]);
 
@@ -129,22 +125,17 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        // FD_ZERO(&wfds);
-        // FD_ZERO(&rfds);
-        // FD_ZERO(&efds);
+        // Initialize fd sets
+        FD_ZERO(&wfds);
+        FD_ZERO(&rfds);
+        FD_ZERO(&efds);
         FD_SET(listen_sockfd, &rfds);
         FD_SET(listen_sockfd, &efds);
         FD_SET(STDIN_FILENO, &rfds);
 
-        printf("Socket fd value: %d\n", listen_sockfd);
-
-        // int rettemp = FD_ISSET(listen_sockfd, &rfds);
-        // printf("%d\n", rettemp);
-        // rettemp = FD_ISSET(listen_sockfd, &efds);
-        // printf("%d\n", rettemp);
-
         // Default prompt
-        printf("#chat with?: \n");
+        printf("#chat with?: ");
+        fflush(stdout);
         // Polling from all avaliable inputs
         retval = select(FD_SETSIZE, &rfds, NULL, NULL, NULL);
 
@@ -155,12 +146,9 @@ int main(int argc, char *argv[]) {
             printf("Select timed out!\n");
             continue;
         } else if (FD_ISSET(STDIN_FILENO, &rfds)) {               // Case: stdin input
-            printf("A key was pressed!\n");
-            read(STDIN_FILENO, buffer, 50);
-            continue;
+            // read(STDIN_FILENO, buffer, 50);
             
-            fgets(input_buffer, 50 , stdin);        // Read user input. Blocking until user finished with EOF
-            // fflush(stdin);
+            fgets(input_buffer, 50 , stdin);        // Read user input. 
             // Analyze input
             // IPv4:port 
             if (!accept_req && !send_msg && (sscanf(input_buffer, "%[0-9.:] %[0-9]", host, port) == 2)) {     // Check if the format is host+port; not answering request or sending messages
@@ -181,7 +169,6 @@ int main(int argc, char *argv[]) {
                         perror("talker: socket");
                         continue;
                     }
-                    setToNonblocking(sockfd);
                     break;
                 }
                 // No socket can be established
@@ -197,18 +184,10 @@ int main(int argc, char *argv[]) {
 
                 sendto(sockfd, msg, strlen(msg), 0, p->ai_addr, p->ai_addrlen);
                 
-
-                // We don't expect immediate return. So we leave it in select polling
-                // if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
-                    reqCount++;
-                    printf("Waiting for peer to accept connection... \n");
-                    FD_SET(sockfd, &rfds);
-                    FD_SET(sockfd, &efds);
-                // } else {
-                    // connectionSuccess(p); 
-                // }
-
-
+                reqCount++;
+                printf("Waiting for peer to accept connection... \n");
+                FD_SET(sockfd, &rfds);
+                FD_SET(sockfd, &efds);
             }
         } else if (FD_ISSET(listen_sockfd, &rfds)) {
             printf("Something on the listening socket... \n");

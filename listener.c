@@ -12,7 +12,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-#define MYPORT "4950" // 用戶所要连线的 port
+#define MYPORT "55555" // 用戶所要连线的 port
 #define MAXBUFLEN 100
 
 // get sockaddr, IPv4 or IPv6:
