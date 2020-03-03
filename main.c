@@ -245,3 +245,30 @@ int setToNonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
+
+// Creates a socket. 
+int asdf(char *host, char *port, struct addrinfo *hint, strut addrinfo *res) {
+
+    if ((ret = getaddrinfo(host, port, hint, res))) {
+        printf("Invalid address. Please try again. \n");
+        puts(gai_strerror(ret));
+        return 1;
+    }
+
+    // Open connection to server
+    for(p = res; p != NULL; p = p->ai_next) {
+        if ((sockfd = socket(p->ai_family, p->ai_socktype,p->ai_protocol)) == -1) {
+            perror("talker: socket");
+            return 1;
+        }
+        break;
+    }
+    // No socket can be established
+    if (p == NULL) {
+        fprintf(stderr, "sender: failed to create socket\n");
+        printf("Cannot establish connection to host %s \n", host);
+        return 1;
+    }
+
+    return 0;
+}
