@@ -28,7 +28,7 @@ struct session {
     struct session *nextSession;
     int reqCount;
     int status;             // As defined above
-} *activeSessions, *requestedSession;
+} *activeSessions;
 
 
 // Flag controlling main loop
@@ -49,7 +49,9 @@ int createSock(char *, char *, struct addrinfo *, struct addrinfo *, int *);
 int createSockAndBind(char *, char *, struct addrinfo *, struct addrinfo *, int *);
 
 int saveSession(struct session **s, int sockfd, struct addrinfo *addr, struct timeval *time);
-int removeSessionByAddr(struct session **s, char *host, char *port);
+int removeSession(struct session **s, int sockfd);
+struct session *findSessionBySock(int sockfd);
+struct session *findSessionByHost(char *host, char *port);
 
 int main(int argc, char *argv[]) {
 
@@ -84,7 +86,7 @@ int main(int argc, char *argv[]) {
     timeout.tv_usec = 0;
 
     // Connection vars
-    struct addrinfo hint, hint_local, *res = NULL, *serverInfo = NULL, *p;
+    struct addrinfo hint, hint_local, *res = NULL, *serverInfo = NULL;
     char buf[50];
     struct sockaddr_storage inc_addr;
     socklen_t addr_len;
@@ -115,7 +117,8 @@ int main(int argc, char *argv[]) {
             printf("You want to drop: %s", input_buffer);
 
             // TODO
-            // removeSessionByAddr();
+            // findSessionByHost();
+            // removeSession();
 
             terminateSession(input_buffer);
             endSession = 0;
@@ -153,7 +156,7 @@ int main(int argc, char *argv[]) {
                 // TODO
                 // Assume for now making new connections
 
-                if((int i = createSock(host, port, &hint, res, &sockfd) != 0)) continue;
+                if((ret = createSock(host, port, &hint, res, &sockfd)) != 0) continue;
 
                 // Send datagram via established socket
                 msg = serializeMsg(TYPE_REQUEST, NULL);
@@ -167,7 +170,7 @@ int main(int argc, char *argv[]) {
                 FD_SET(sockfd, &rfds);
                 FD_SET(sockfd, &efds);
             }
-        } else if (FD_ISSET(listen_sockfd, &rfds)) {
+        } else if (FD_ISSET(listen_sockfd, &rfds)) {                // Incoming transmission/request on listening socket
             printf("Something on the listening socket... \n");
             // continue;
 
@@ -179,6 +182,27 @@ int main(int argc, char *argv[]) {
             struct sockaddr_in *sin = (struct sockaddr_in *)&inc_addr;
             unsigned char *ip = (unsigned char *)&sin->sin_addr.s_addr;
             printf("#session request from: %s\n", ip);          // Assuming IPv4 address
+        } else {                // Incoming transmission on established sessions
+            // Iterate through activeSessions and process 
+            for (struct session *p=activeSessions; p != NULL; p=p->nextSession) {
+                if (FD_ISSET(p->sockfd, &rfds)) {
+                    // Incoming transmission on socket
+                    if (p->status == REQUESTING && p->reqCount <= 3) {             // Hearing back from a connection request and retry
+                        continue;
+                    }
+                    if (p->status == REQUESTING && p->reqCount > 3) {             // Hearing back from a connection request and stop retry
+                        continue;
+                    }
+                    if (p->status == ESTABLISHED) {             // Getting a heart beat
+                        continue;
+                    }
+                }
+
+                if (FD_ISSET(p->sockfd, &efds)) {
+                    // Error on transmission on socket
+                    continue;
+                }
+            }
         }
     }
 
