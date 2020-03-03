@@ -29,6 +29,7 @@ void terminateSession(char []);
 char *serializeMsg(int, char*);
 void connectionSuccess(struct addrinfo*);
 int setToNonblocking(int);
+int createSock(char *, char *, struct addrinfo *, struct addrinfo *, int *);
 
 int main(int argc, char *argv[]) {
 
@@ -155,28 +156,7 @@ int main(int argc, char *argv[]) {
 
                 // TODO
                 // Assume for now making new connections
-
-                // Make new conncetions
-                if ((ret = getaddrinfo(host, port, &hint, &res))) {
-                    printf("Invalid address. Please try again. \n");
-                    puts(gai_strerror(ret));
-                    continue;
-                }
-
-                // Open connection to server
-                for(p = res; p != NULL; p = p->ai_next) {
-                    if ((sockfd = socket(p->ai_family, p->ai_socktype,p->ai_protocol)) == -1) {
-                        perror("talker: socket");
-                        continue;
-                    }
-                    break;
-                }
-                // No socket can be established
-                if (p == NULL) {
-                    fprintf(stderr, "sender: failed to create socket\n");
-                    printf("Cannot establish connection to host %s \n", host);
-                    continue;
-                }
+                int i = createSock(host, port, &hint, res, &sockfd);
 
                 // Send datagram via established socket
                 msg = serializeMsg(TYPE_REQUEST, NULL);
@@ -247,9 +227,11 @@ int setToNonblocking(int fd) {
 }
 
 // Creates a socket. 
-int asdf(char *host, char *port, struct addrinfo *hint, strut addrinfo *res) {
+int createSock(char *host, char *port, struct addrinfo *hint, struct addrinfo *res, int *sockfd) {
 
-    if ((ret = getaddrinfo(host, port, hint, res))) {
+    int ret;
+    struct addrinfo *p;
+    if ((ret = getaddrinfo(host, port, hint, &res))) {
         printf("Invalid address. Please try again. \n");
         puts(gai_strerror(ret));
         return 1;
@@ -257,7 +239,7 @@ int asdf(char *host, char *port, struct addrinfo *hint, strut addrinfo *res) {
 
     // Open connection to server
     for(p = res; p != NULL; p = p->ai_next) {
-        if ((sockfd = socket(p->ai_family, p->ai_socktype,p->ai_protocol)) == -1) {
+        if ((*sockfd = socket(p->ai_family, p->ai_socktype,p->ai_protocol)) == -1) {
             perror("talker: socket");
             return 1;
         }
