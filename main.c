@@ -53,8 +53,6 @@ void SIGHandler(int);
 void terminateAllSessions();
 char *serializeMsg(int, char*);
 int unserializeMsg(char *, int *, char *);
-void connectionSuccess(struct addrinfo*);
-int setToNonblocking(int);
 
 int createSock(char *, char *, struct addrinfo *, struct addrinfo *, int *);
 int createSockAndBind(char *, char *, struct addrinfo *, struct addrinfo *, int *);
@@ -198,6 +196,7 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
                 sendto(sockfd, msg, strlen(msg), 0, res->ai_addr, res->ai_addrlen);
+                free(msg);
                 newSession(&activeSessions, sockfd, res, NULL, REQUESTING);
                 res = NULL;
                 printf("Waiting for peer to accept connection... \n");
@@ -210,6 +209,7 @@ int main(int argc, char *argv[]) {
             if (send_msg && (sscanf(input_buffer, "%s", input) == 1)) {
                 char *msg = serializeMsg(TYPE_MSG, input);
                 sendto(prompt_session->sockfd, msg, strlen(msg), 0, prompt_session->address->ai_addr, prompt_session->address->ai_addrlen);
+                free(msg);
                 send_msg = 0;
                 continue;
             }
@@ -224,10 +224,11 @@ int main(int argc, char *argv[]) {
                 } else {
                     // Denies request
                     msg = serializeMsg(TYPE_DENY, NULL);
-                    struct session *pre; 
+                    struct session *pre;
                     removeSession(&activeSessions, prompt_session->sockfd, pre);
                 }
                 sendto(prompt_session->sockfd, msg, strlen(msg), 0, prompt_session->address->ai_addr, prompt_session->address->ai_addrlen);
+                free(msg);
                 confirm_req = 0;
                 continue;
             }
@@ -254,7 +255,7 @@ int main(int argc, char *argv[]) {
 
             struct sockaddr_in *sin = (struct sockaddr_in *)&inc_addr;
             char *in_host = inet_ntoa(sin->sin_addr);
-            char *in_port;
+            char in_port[255];
             int r = sprintf(in_port, "%d", ntohs(sin->sin_port));
             printf("#session request from: %s %s\n", in_host, in_port);
             if((ret = createSock(in_host, in_port, &hint, res, &sockfd)) != 0) {
@@ -281,7 +282,7 @@ int main(int argc, char *argv[]) {
                     }
                     struct sockaddr_in *sin = (struct sockaddr_in *)&inc_addr;
                     char *in_host = inet_ntoa(sin->sin_addr);
-                    char *in_port;
+                    char in_port[255];
                     char *rep;
                     int r = sprintf(in_port, "%d", ntohs(sin->sin_port));
 
@@ -294,6 +295,7 @@ int main(int argc, char *argv[]) {
                         case TYPE_CLOSE:
                             rep = serializeMsg(TYPE_C_ACK, NULL);
                             sendto(p->sockfd, rep, strlen(rep), 0, p->address->ai_addr, p->address->ai_addrlen);
+                            free(rep);
                             p->status = CLOSING;
                             break;
                         case TYPE_DENY:
@@ -381,23 +383,38 @@ void terminateAllSessions() {
 
 // Generate message (str) based on message type
 char *serializeMsg(int msg_type, char *msg) {
-    // uint32_t 0;
-    return message;
+    char *res = (char *)malloc(55);
+    char *type;
+    sprintf(type, "%d", msg_type);
+    strcpy(res, type);
+    strcat(res, "1234");
+    strcat(res, msg);
+    return res;
+}
+
+char *substring(char *dst,char *src,int start,int len)
+{  
+	char *p=dst;  
+	char *q=src;  
+	int length=strlen(src); 
+	if(start>=length||start<0) 
+		return NULL;  
+	if(len>length) 
+		len=length-start; 
+	q+=start;
+	while(len--)  
+	{   
+		*(p++)=*(q++); 
+	}  
+	*(p++)='\0';  
+	return dst;
 }
 
 // Unserialize mssage (str) and returns mesage type and origial message
 int unserializeMsg(char *input, int *msg_type, char *msg) {
+    *msg_type = atoi(&input[0]);
+    msg = substring(msg, input, 1, 4);
     return 0;
-}
-
-// Save and monitor established connections
-void connectionSuccess(struct addrinfo *info) {
-    // TODO 
-}
-
-int setToNonblocking(int fd) {
-    int flags = fcntl(fd, F_GETFL, 0);
-    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
 // Creates a socket. 
@@ -472,7 +489,7 @@ int newSession(struct session **s, int sockfd, struct addrinfo *addr, struct tim
     new_session->sockfd = sockfd;
     new_session->address = addr;
     new_session->status = status;
-    new_session->lastUpdate = time;
+    new_session->lastUpdated = *time;
     new_session->nextSession = NULL;
 
     for (struct session *p=*s; p != NULL; p=p->nextSession) {
@@ -509,7 +526,7 @@ int terminateSession(struct session **s, int sockfd) {
 
     struct sockaddr_in *sin = (struct sockaddr_in *)p->address->ai_addr;
     char *in_host = inet_ntoa(sin->sin_addr);
-    char *in_port;
+    char in_port[255];
     int r = sprintf(in_port, "%d", ntohs(sin->sin_port));
     char *rep = serializeMsg(TYPE_CLOSE, NULL);
     sendto(p->sockfd, rep, strlen(rep), 0, p->address->ai_addr, p->address->ai_addrlen);
@@ -529,7 +546,7 @@ struct session *findSessionByHost(struct session **s, char *host, char *port) {
     struct session *p;
     struct sockaddr_in *sin;
     char *in_host;
-    char *in_port;
+    char in_port[255];
     int r;
     for (p=activeSessions; p!=NULL; p=p->nextSession) {
         sin = (struct sockaddr_in *)p->address->ai_addr;
