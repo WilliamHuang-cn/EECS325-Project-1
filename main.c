@@ -15,6 +15,8 @@
 #define TYPE_HEARTBEAT (1)
 #define TYPE_MSG (2)
 #define TYPE_CLOSE (3)
+#define TYPE_DENY (4)
+#define TYPE_CONFIRM (5)
 
 #define REQUESTING (0)              // A session that is requested but not confirmed by peer
 #define ESTABLISHED (1)
@@ -40,7 +42,6 @@ char *message = "asdfg";
 
 void SIGHandler(int);
 void terminateAllSessions();
-void terminateSession(char []);
 char *serializeMsg(int, char*);
 void connectionSuccess(struct addrinfo*);
 int setToNonblocking(int);
@@ -71,7 +72,8 @@ int main(int argc, char *argv[]) {
 
     // Input flags
     int send_msg = 0, confirm_req = 0, term_session = 0;
-    char *input;
+    char *input, prompt_host, prompt_port;
+    struct session *prompt_session;
 
     // Connection flags
     int reqCount = 0;
@@ -111,7 +113,7 @@ int main(int argc, char *argv[]) {
     // Main polling loop
     while (keepRunning) {
         
-        // Promt session termination
+        // Prompt session termination. Note this is blocking: no new messages or commands allowed until finished
         if (endSession) {
             printf("#terminate session (for help <h>): ");
             fgets(input_buffer, 50, stdin);
@@ -119,17 +121,16 @@ int main(int argc, char *argv[]) {
 
             // Extract host and port from input
             if (sscanf(input_buffer, "%[0-9.:] %[0-9]", host, port) == 2) {
+                // Send terminate message to peer
                 struct session *s = findSessionByHost(&activeSessions, host, port);
                 terminateSession(&activeSessions, s->sockfd);
+                endSession = 0;
+                continue;
             } else {
                 printf("Invalid input. Please try again.\n");
                 continue;
             }
-            // findSessionByHost();
-            // removeSession();
 
-            terminateSession(input_buffer);
-            endSession = 0;
             continue;
         }
 
@@ -140,12 +141,19 @@ int main(int argc, char *argv[]) {
         FD_SET(listen_sockfd, &rfds);
         FD_SET(listen_sockfd, &efds);
         FD_SET(STDIN_FILENO, &rfds);
+        for (struct session *p = activeSessions; p!=NULL; p=p->nextSession) {
+            FD_SET(p->sockfd, &rfds);
+            FD_SET(p->sockfd, &efds);
+        }
 
         // Default prompt
-        printf("#chat with?: ");
+        if (!send_msg && !confirm_req) printf("#chat with?: ");
+        if (send_msg) printf("[%s:%s] your message: ", prompt_host, prompt_port);
+        if (confirm_req) printf("[%s:%s] accept request? (y/n) ", prompt_host, prompt_port);
         fflush(stdout);
+
         // Polling from all avaliable inputs
-        retval = select(FD_SETSIZE, &rfds, NULL, NULL, NULL);
+        retval = select(FD_SETSIZE, &rfds, &wfds, &efds, NULL);
 
         if (retval == -1) {
             perror("select()");
@@ -153,23 +161,29 @@ int main(int argc, char *argv[]) {
         } else if (retval == 0) {
             printf("Select timed out!\n");
             continue;
-        } else if (FD_ISSET(STDIN_FILENO, &rfds)) {               // Case: stdin input
-            // read(STDIN_FILENO, buffer, 50);
-            
+        } else if (FD_ISSET(STDIN_FILENO, &rfds)) {               // Case: stdin input            
             fgets(input_buffer, 50 , stdin);        // Read user input. 
             // Analyze input
             // IPv4:port + creating a new connection
             if (!send_msg && !term_session && !confirm_req && (sscanf(input_buffer, "%[0-9.:] %[0-9]", host, port) == 2)) {     // Check if the format is host+port; not answering request or sending messages
 
-                // TODO
-                // Assume for now making new connections
-                // findSessionByHost(host, port);
+                // Try finding existing session by host and port
+                prompt_session = findSessionByHost(&activeSessions, host, port);
+                if (prompt_session != NULL) {
+                    prompt_host = host;
+                    prompt_port = port;
+                    if (prompt_session->status == ESTABLISHED) {
+                        send_msg = 1;
+                    } else if (prompt_session->status == WAITING_CONFIRM) {
+                        confirm_req = 1;
+                    }
+                    continue;
+                }
 
                 if((ret = createSock(host, port, &hint, res, &sockfd)) != 0) continue;
 
                 // Send datagram via established socket
-                char *msg;
-                msg = serializeMsg(TYPE_REQUEST, NULL);
+                char *msg = serializeMsg(TYPE_REQUEST, NULL);
                 if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
                     perror("setsockopt()");
                     continue;
@@ -184,11 +198,26 @@ int main(int argc, char *argv[]) {
 
             // String + Sending message
             if (send_msg && (sscanf(input_buffer, "%s", input) == 1)) {
+                char *msg = serializeMsg(TYPE_MSG, input);
+                sendto(prompt_session->sockfd, msg, strlen(msg), 0, prompt_session->address->ai_addr, prompt_session->address->ai_addrlen);
+                send_msg = 0;
                 continue;
             }
 
             // y/n + Confirming request
             if (confirm_req && (sscanf(input_buffer, "%1[ynYN]", input) == 1)) {
+                char *msg;
+                if (input == "y" || input == "Y") {
+                    // Confirms request
+                    prompt_session->status = ESTABLISHED;
+                    msg = serializeMsg(TYPE_CONFIRM, NULL);
+                } else {
+                    // Denies request
+                    prompt_session->status = ESTABLISHED;
+                    msg = serializeMsg(TYPE_DENY, NULL);
+                }
+                sendto(prompt_session->sockfd, msg, strlen(msg), 0, prompt_session->address->ai_addr, prompt_session->address->ai_addrlen);
+                confirm_req = 0;
                 continue;
             }
 
@@ -199,7 +228,7 @@ int main(int argc, char *argv[]) {
             // }
 
             // No match. 
-            printf("Bad input. Please try again. \n");
+            printf("Invalid input. Please try again. \n");
             continue;
 
         } else if (FD_ISSET(listen_sockfd, &rfds)) {                // Incoming transmission/request on listening socket
@@ -272,11 +301,6 @@ void SIGHandler(int sig) {
 // Drops all connections. One-sided
 void terminateAllSessions() {
     printf("terminating all sessions... \n");
-}
-
-
-void terminateSession(char str[]) {
-    printf("terminate session %s", str);
 }
 
 // Generate message (str) based on message type
@@ -368,6 +392,11 @@ int newSession(struct session **s, int sockfd, struct addrinfo *addr, struct tim
 int removeSession(struct session **s, int sockfd) {
     return 0;
 }
+
+int terminateSession(struct session **s, int sockfd) {
+    return 0;
+}
+
 struct session *findSessionBySock(struct session **s, int sockfd) {
     return 0;
 }
