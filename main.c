@@ -63,10 +63,10 @@ int main(int argc, char *argv[]) {
     char buffer[50];
     char host[50], port[50];
     int ret, sockfd, listen_sockfd;
-    char *msg;
 
     // Input flags
-    int accept_req = 0, send_msg = 0;
+    int send_msg = 0, confirm_req = 0, term_session = 0;
+    char *input;
 
     // Connection flags
     int reqCount = 0;
@@ -150,15 +150,17 @@ int main(int argc, char *argv[]) {
             
             fgets(input_buffer, 50 , stdin);        // Read user input. 
             // Analyze input
-            // IPv4:port 
-            if (!accept_req && !send_msg && (sscanf(input_buffer, "%[0-9.:] %[0-9]", host, port) == 2)) {     // Check if the format is host+port; not answering request or sending messages
+            // IPv4:port + creating a new connection
+            if (!send_msg && !term_session && !confirm_req && (sscanf(input_buffer, "%[0-9.:] %[0-9]", host, port) == 2)) {     // Check if the format is host+port; not answering request or sending messages
 
                 // TODO
                 // Assume for now making new connections
+                // findSessionByHost(host, port);
 
                 if((ret = createSock(host, port, &hint, res, &sockfd)) != 0) continue;
 
                 // Send datagram via established socket
+                char *msg;
                 msg = serializeMsg(TYPE_REQUEST, NULL);
                 if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
                     perror("setsockopt():");
@@ -169,7 +171,28 @@ int main(int argc, char *argv[]) {
                 printf("Waiting for peer to accept connection... \n");
                 FD_SET(sockfd, &rfds);
                 FD_SET(sockfd, &efds);
+                continue;
             }
+
+            // String + Sending message
+            if (send_msg && (sscanf(input_buffer, "%s", input) == 1)) {
+                continue;
+            }
+
+            // y/n + Confirming request
+            if (confirm_req && (sscanf(input_buffer, "%1[ynYN]", input) == 1)) {
+                continue;
+            }
+
+            // IPv4:port + terminating a session
+            if (term_session && (sscanf(input_buffer, "%[0-9.:] %[0-9]", host, port) == 2)) {
+                continue;
+            }
+
+            // No match. 
+            printf("Bad input. Please try again");
+            continue;
+
         } else if (FD_ISSET(listen_sockfd, &rfds)) {                // Incoming transmission/request on listening socket
             printf("Something on the listening socket... \n");
             // continue;
@@ -198,7 +221,7 @@ int main(int argc, char *argv[]) {
                     if (p->status == ESTABLISHED) {             // Getting a heart beat
                         
                         // TODO
-                        // 
+                        // ACK to heartbeat
                         
                         continue;
                     }
