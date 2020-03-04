@@ -16,9 +16,10 @@
 #define TYPE_MSG (2)
 #define TYPE_CLOSE (3)
 
-#define REQUESTING (0)
+#define REQUESTING (0)              // A session that is requested but not confirmed by peer
 #define ESTABLISHED (1)
 #define CLOSING (2)
+#define WAITING_CONFIRM (3)             // A seesion that is started by peer but not confirmed by host
 
 // Defines a linked list of saved sessions
 struct session {
@@ -48,7 +49,7 @@ int setToNonblocking(int);
 int createSock(char *, char *, struct addrinfo *, struct addrinfo *, int *);
 int createSockAndBind(char *, char *, struct addrinfo *, struct addrinfo *, int *);
 
-int saveSession(struct session **, int, struct addrinfo *, struct timeval *);
+int newSession(struct session **, int, struct addrinfo *, struct timeval *, int);
 int removeSession(struct session **, int);
 struct session *findSessionBySock(int);
 struct session *findSessionByHost(char *, char *);
@@ -167,7 +168,7 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
                 sendto(sockfd, msg, strlen(msg), 0, res->ai_addr, res->ai_addrlen);
-                saveSession(&activeSessions, sockfd, res, NULL);
+                newSession(&activeSessions, sockfd, res, NULL, REQUESTING);
                 printf("Waiting for peer to accept connection... \n");
                 FD_SET(sockfd, &rfds);
                 FD_SET(sockfd, &efds);
@@ -343,7 +344,7 @@ int createSockAndBind(char *host, char *port, struct addrinfo *hint, struct addr
     return 0;
 }
 
-int saveSession(struct session **s, int sockfd, struct addrinfo *addr, struct timeval *time) {
+int newSession(struct session **s, int sockfd, struct addrinfo *addr, struct timeval *time, int status) {
     return 0;
 }
 
