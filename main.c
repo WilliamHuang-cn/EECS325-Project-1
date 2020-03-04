@@ -17,6 +17,8 @@
 #define TYPE_CLOSE (3)
 #define TYPE_DENY (4)
 #define TYPE_CONFIRM (5)
+#define TYPE_H_ACK (6)
+#define TYPE_C_ACK (7)
 
 #define REQUESTING (0)              // A session that is requested but not confirmed by peer
 #define ESTABLISHED (1)
@@ -27,11 +29,17 @@
 struct session {
     int sockfd;
     struct addrinfo *address;
+    // char *host;
+    // char *port;
     struct timeval lastUpdated;
     struct session *nextSession;
     int reqCount;
     int status;             // As defined above
 };
+
+// Saved sessions
+struct session _activeSessions;
+struct session *activeSessions = &_activeSessions;
 
 // Flag controlling main loop
 int volatile keepRunning = 1;
@@ -43,6 +51,7 @@ char *message = "asdfg";
 void SIGHandler(int);
 void terminateAllSessions();
 char *serializeMsg(int, char*);
+int unserializeMsg(char *, int *, char *);
 void connectionSuccess(struct addrinfo*);
 int setToNonblocking(int);
 
@@ -50,7 +59,7 @@ int createSock(char *, char *, struct addrinfo *, struct addrinfo *, int *);
 int createSockAndBind(char *, char *, struct addrinfo *, struct addrinfo *, int *);
 
 int newSession(struct session **, int, struct addrinfo *, struct timeval *, int);
-int removeSession(struct session **, int);
+int removeSession(struct session **, int, struct session *);
 int terminateSession(struct session **, int);
 struct session *findSessionBySock(struct session **, int);
 struct session *findSessionByHost(struct session **, char *, char *);
@@ -60,10 +69,6 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, SIGHandler);
     signal(SIGQUIT, SIGHandler);
 
-    // Saved sessions
-    struct session _activeSessions;
-    struct session *activeSessions = &_activeSessions;
-
     // input value holders
     char input_buffer[50];      // Using 50 char as default input length
     char buffer[50];
@@ -72,7 +77,7 @@ int main(int argc, char *argv[]) {
 
     // Input flags
     int send_msg = 0, confirm_req = 0, term_session = 0;
-    char *input, prompt_host, prompt_port;
+    char *input, *prompt_host, *prompt_port;
     struct session *prompt_session;
 
     // Connection flags
@@ -90,7 +95,7 @@ int main(int argc, char *argv[]) {
 
     // Connection vars
     struct addrinfo hint, hint_local, *res = NULL, *serverInfo = NULL;
-    char buf[50];
+    char buf[100];
     struct sockaddr_storage inc_addr;
     socklen_t addr_len;
 
@@ -106,8 +111,8 @@ int main(int argc, char *argv[]) {
 
     // Server init with input argv[1] (listening port)
     createSockAndBind(NULL, argv[1], &hint_local, serverInfo, &listen_sockfd);
-
     freeaddrinfo(serverInfo);
+
     printf("Listening on port: %s\n", argv[1]);
 
     // Main polling loop
@@ -180,7 +185,10 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-                if((ret = createSock(host, port, &hint, res, &sockfd)) != 0) continue;
+                if((ret = createSock(host, port, &hint, res, &sockfd)) != 0) {
+                    res = NULL;
+                    continue;
+                };
 
                 // Send datagram via established socket
                 char *msg = serializeMsg(TYPE_REQUEST, NULL);
@@ -190,6 +198,7 @@ int main(int argc, char *argv[]) {
                 }
                 sendto(sockfd, msg, strlen(msg), 0, res->ai_addr, res->ai_addrlen);
                 newSession(&activeSessions, sockfd, res, NULL, REQUESTING);
+                res = NULL;
                 printf("Waiting for peer to accept connection... \n");
                 FD_SET(sockfd, &rfds);
                 FD_SET(sockfd, &efds);
@@ -213,8 +222,9 @@ int main(int argc, char *argv[]) {
                     msg = serializeMsg(TYPE_CONFIRM, NULL);
                 } else {
                     // Denies request
-                    prompt_session->status = ESTABLISHED;
                     msg = serializeMsg(TYPE_DENY, NULL);
+                    struct session *pre; 
+                    removeSession(&activeSessions, prompt_session->sockfd, pre);
                 }
                 sendto(prompt_session->sockfd, msg, strlen(msg), 0, prompt_session->address->ai_addr, prompt_session->address->ai_addrlen);
                 confirm_req = 0;
@@ -232,46 +242,102 @@ int main(int argc, char *argv[]) {
             continue;
 
         } else if (FD_ISSET(listen_sockfd, &rfds)) {                // Incoming transmission/request on listening socket
-            printf("Something on the listening socket... \n");
+            // printf("Something on the listening socket... \n");
             // continue;
 
-            // Deal with bad package
+            // Deal with incoming package
             if (recvfrom(listen_sockfd, buf, sizeof(buf), 0, (struct sockaddr *)&inc_addr, &addr_len) == -1){
                 perror("recvfrom");
                 continue;
             }
+
             struct sockaddr_in *sin = (struct sockaddr_in *)&inc_addr;
-            unsigned char *ip = (unsigned char *)&sin->sin_addr.s_addr;
-            printf("#session request from: %s\n", ip);          // Assuming IPv4 address
+            char *in_host = inet_ntoa(sin->sin_addr);
+            char *in_port;
+            int r = sprintf(in_port, "%d", ntohs(sin->sin_port));
+            printf("#session request from: %s %s\n", in_host, in_port);
+            if((ret = createSock(in_host, in_port, &hint, res, &sockfd)) != 0) {
+                res = NULL;
+                continue;
+            }
+            newSession(&activeSessions, sockfd, res, NULL, WAITING_CONFIRM);
+
         } else if (FD_ISSET(listen_sockfd, &efds)) {
             // Handle error on listening socket
+            printf("Something wrong with listening socket. \n");
+            continue;
         } else {                // Incoming transmission on established sessions
             // Iterate through activeSessions and process 
+            struct session *previous = NULL;
             for (struct session *p=activeSessions; p != NULL; p=p->nextSession) {
                 if (FD_ISSET(p->sockfd, &rfds)) {
                     // Incoming transmission on socket
-                    if (p->status == REQUESTING && p->reqCount <= 3) {             // Hearing back from a connection request and retry
-                        // retryConnection();
+                    char msg[50];
+                    int type;
+                    if (recvfrom(p->sockfd, buf, sizeof(buf), 0, (struct sockaddr *)&inc_addr, &addr_len) == -1){
+                        perror("recvfrom");
                         continue;
                     }
-                    if (p->status == REQUESTING && p->reqCount > 3) {             // Hearing back from a connection request and stop retry
-                        // connectionTimeout();
-                        continue;
+                    struct sockaddr_in *sin = (struct sockaddr_in *)&inc_addr;
+                    char *in_host = inet_ntoa(sin->sin_addr);
+                    char *in_port;
+                    char *rep;
+                    int r = sprintf(in_port, "%d", ntohs(sin->sin_port));
+
+                    unserializeMsg(buf, &type, msg);
+                    switch (type)
+                    {
+                        case TYPE_HEARTBEAT:
+                            /* code */
+                            break;
+                        case TYPE_CLOSE:
+                            rep = serializeMsg(TYPE_C_ACK, NULL);
+                            sendto(p->sockfd, msg, strlen(msg), 0, p->address->ai_addr, p->address->ai_addrlen);
+                            p->status = CLOSING;
+                            break;
+                        case TYPE_DENY:
+                            printf("#failure: %s %s\n", in_host, in_port);
+                            removeSession(&activeSessions, p->sockfd, previous);
+                            p = previous;
+                            break;
+                        case TYPE_CONFIRM:
+                            p->status = ESTABLISHED;
+                            printf("#success: %s %s\n", in_host, in_port);
+                            break;
+                        case TYPE_MSG:
+                            printf("#[%s %s] sent msg: %s\n", in_host, in_port, msg);
+                            break;
+                        case TYPE_C_ACK:
+                            printf("#terminating session with %s %s\n", in_host, in_port);
+                            removeSession(&activeSessions, p->sockfd, previous);
+                            p = previous;
+                            break;
+                        case TYPE_H_ACK:
+                            break;
+                        default:
+                            printf("Unrecognized incoming message.");
+                            break;
                     }
-                    if (p->status == ESTABLISHED) {             // Getting a heart beat
+                    // if (p->status == REQUESTING && p->reqCount <= 3) {             // Hearing back from a connection request and retry
+                    //     // retryConnection();
+                    //     continue;
+                    // }
+                    // if (p->status == REQUESTING && p->reqCount > 3) {             // Hearing back from a connection request and stop retry
+                    //     // connectionTimeout();
+                    //     continue;
+                    // }
+                    // if (p->status == ESTABLISHED) {             // Getting a heart beat
                         
-                        // TODO
-                        // ACK to heartbeat
-                        // Response to closing request
+                    //     // TODO
+                    //     // ACK to heartbeat
+                    //     // Response to closing request
 
-                        continue;
-                    }
-                    if (p->status == CLOSING) {
-
-                        // TODO 
-                        // removeSession();
-                        continue;
-                    }
+                    //     continue;
+                    // }
+                    // if (p->status == CLOSING) {
+                    //     char *msg = serializeMsg(TYPE_CONFIRM, NULL);
+                    //     continue;
+                    // }
                 }
 
                 if (FD_ISSET(p->sockfd, &efds)) {
@@ -284,7 +350,7 @@ int main(int argc, char *argv[]) {
 
     terminateAllSessions();
     close(listen_sockfd);
-    freeaddrinfo(res);
+    // freeaddrinfo(res);
     return 0;
 }
 
@@ -301,12 +367,20 @@ void SIGHandler(int sig) {
 // Drops all connections. One-sided
 void terminateAllSessions() {
     printf("terminating all sessions... \n");
+    for (struct session *s = activese) {
+
+    }
 }
 
 // Generate message (str) based on message type
 char *serializeMsg(int msg_type, char *msg) {
     // uint32_t 0;
     return message;
+}
+
+// Unserialize mssage (str) and returns mesage type and origial message
+int unserializeMsg(char *input, int *msg_type, char *msg) {
+    return 0;
 }
 
 // Save and monitor established connections
@@ -389,7 +463,7 @@ int newSession(struct session **s, int sockfd, struct addrinfo *addr, struct tim
     return 0;
 }
 
-int removeSession(struct session **s, int sockfd) {
+int removeSession(struct session **s, int sockfd, struct session *p) {
     return 0;
 }
 
