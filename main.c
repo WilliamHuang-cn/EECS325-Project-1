@@ -29,8 +29,7 @@ struct session {
     struct session *nextSession;
     int reqCount;
     int status;             // As defined above
-} *activeSessions;
-
+};
 
 // Flag controlling main loop
 int volatile keepRunning = 1;
@@ -51,13 +50,18 @@ int createSockAndBind(char *, char *, struct addrinfo *, struct addrinfo *, int 
 
 int newSession(struct session **, int, struct addrinfo *, struct timeval *, int);
 int removeSession(struct session **, int);
-struct session *findSessionBySock(int);
-struct session *findSessionByHost(char *, char *);
+int terminateSession(struct session **, int);
+struct session *findSessionBySock(struct session **, int);
+struct session *findSessionByHost(struct session **, char *, char *);
 
 int main(int argc, char *argv[]) {
 
     signal(SIGINT, SIGHandler);
     signal(SIGQUIT, SIGHandler);
+
+    // Saved sessions
+    struct session _activeSessions;
+    struct session *activeSessions = &_activeSessions;
 
     // input value holders
     char input_buffer[50];      // Using 50 char as default input length
@@ -72,15 +76,11 @@ int main(int argc, char *argv[]) {
     // Connection flags
     int reqCount = 0;
 
-    // Saved sessions
-    // ????
-
     // Select vars
     fd_set wfds, rfds, efds;
     FD_ZERO(&wfds);
     FD_ZERO(&rfds);
     FD_ZERO(&efds);
-    // FD_SET(STDIN_FILENO, &rfds);
     int retval;
     struct timeval timeout;
     timeout.tv_sec = 3;
@@ -117,7 +117,14 @@ int main(int argc, char *argv[]) {
             fgets(input_buffer, 50, stdin);
             printf("You want to drop: %s", input_buffer);
 
-            // TODO
+            // Extract host and port from input
+            if (sscanf(input_buffer, "%[0-9.:] %[0-9]", host, port) == 2) {
+                struct session *s = findSessionByHost(&activeSessions, host, port);
+                terminateSession(&activeSessions, s->sockfd);
+            } else {
+                printf("Invalid input. Please try again.\n");
+                continue;
+            }
             // findSessionByHost();
             // removeSession();
 
@@ -164,7 +171,7 @@ int main(int argc, char *argv[]) {
                 char *msg;
                 msg = serializeMsg(TYPE_REQUEST, NULL);
                 if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
-                    perror("setsockopt():");
+                    perror("setsockopt()");
                     continue;
                 }
                 sendto(sockfd, msg, strlen(msg), 0, res->ai_addr, res->ai_addrlen);
@@ -185,13 +192,14 @@ int main(int argc, char *argv[]) {
                 continue;
             }
 
+            // Already handled earlier
             // IPv4:port + terminating a session
-            if (term_session && (sscanf(input_buffer, "%[0-9.:] %[0-9]", host, port) == 2)) {
-                continue;
-            }
+            // if (term_session && (sscanf(input_buffer, "%[0-9.:] %[0-9]", host, port) == 2)) {
+            //     continue;
+            // }
 
             // No match. 
-            printf("Bad input. Please try again");
+            printf("Bad input. Please try again. \n");
             continue;
 
         } else if (FD_ISSET(listen_sockfd, &rfds)) {                // Incoming transmission/request on listening socket
@@ -206,6 +214,8 @@ int main(int argc, char *argv[]) {
             struct sockaddr_in *sin = (struct sockaddr_in *)&inc_addr;
             unsigned char *ip = (unsigned char *)&sin->sin_addr.s_addr;
             printf("#session request from: %s\n", ip);          // Assuming IPv4 address
+        } else if (FD_ISSET(listen_sockfd, &efds)) {
+            // Handle error on listening socket
         } else {                // Incoming transmission on established sessions
             // Iterate through activeSessions and process 
             for (struct session *p=activeSessions; p != NULL; p=p->nextSession) {
@@ -223,7 +233,14 @@ int main(int argc, char *argv[]) {
                         
                         // TODO
                         // ACK to heartbeat
-                        
+                        // Response to closing request
+
+                        continue;
+                    }
+                    if (p->status == CLOSING) {
+
+                        // TODO 
+                        // removeSession();
                         continue;
                     }
                 }
@@ -351,9 +368,9 @@ int newSession(struct session **s, int sockfd, struct addrinfo *addr, struct tim
 int removeSession(struct session **s, int sockfd) {
     return 0;
 }
-struct session *findSessionBySock(int sockfd) {
+struct session *findSessionBySock(struct session **s, int sockfd) {
     return 0;
 }
-struct session *findSessionByHost(char *host, char *port) {
+struct session *findSessionByHost(struct session **s, char *host, char *port) {
     return 0;
 }
