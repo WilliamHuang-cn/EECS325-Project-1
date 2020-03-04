@@ -10,6 +10,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <fcntl.h>
+#include <stdlib.h>
 
 #define TYPE_REQUEST (0)
 #define TYPE_HEARTBEAT (1)
@@ -292,7 +293,7 @@ int main(int argc, char *argv[]) {
                             break;
                         case TYPE_CLOSE:
                             rep = serializeMsg(TYPE_C_ACK, NULL);
-                            sendto(p->sockfd, msg, strlen(msg), 0, p->address->ai_addr, p->address->ai_addrlen);
+                            sendto(p->sockfd, rep, strlen(rep), 0, p->address->ai_addr, p->address->ai_addrlen);
                             p->status = CLOSING;
                             break;
                         case TYPE_DENY:
@@ -367,8 +368,14 @@ void SIGHandler(int sig) {
 // Drops all connections. One-sided
 void terminateAllSessions() {
     printf("terminating all sessions... \n");
-    for (struct session *s = activese) {
-
+    // Release all sockets
+    struct session *q;
+    for (struct session *p = activeSessions; p != NULL;) {
+        close(p->sockfd);
+        freeaddrinfo(p->address);
+        q = p;
+        p = p->nextSession;
+        free(q);
     }
 }
 
@@ -460,20 +467,77 @@ int createSockAndBind(char *host, char *port, struct addrinfo *hint, struct addr
 }
 
 int newSession(struct session **s, int sockfd, struct addrinfo *addr, struct timeval *time, int status) {
+    struct session *new_session;
+    new_session = (struct session *)malloc(sizeof(new_session));
+    new_session->sockfd = sockfd;
+    new_session->address = addr;
+    new_session->status = status;
+    new_session->lastUpdate = time;
+    new_session->nextSession = NULL;
+
+    for (struct session *p=*s; p != NULL; p=p->nextSession) {
+        if (p->nextSession == NULL) {
+            p->nextSession = new_session;
+        }
+    }
+
     return 0;
 }
 
-int removeSession(struct session **s, int sockfd, struct session *p) {
+int removeSession(struct session **s, int sockfd, struct session *ret) {
+    struct session *prev=activeSessions;
+    for (struct session *p = activeSessions; p != NULL; prev=p, p=p->nextSession) {
+        if (p->sockfd == sockfd) {
+            prev->nextSession = p->nextSession;
+            close(p->sockfd);
+            freeaddrinfo(p->address);
+            free(p);
+            break;
+        }
+    }
+    ret = prev;
     return 0;
 }
 
 int terminateSession(struct session **s, int sockfd) {
+    struct session *p;
+    for (p=activeSessions; p!=NULL; p=p->nextSession) {
+        if (p->sockfd == sockfd) {
+            break;
+        }
+    }
+
+    struct sockaddr_in *sin = (struct sockaddr_in *)p->address->ai_addr;
+    char *in_host = inet_ntoa(sin->sin_addr);
+    char *in_port;
+    int r = sprintf(in_port, "%d", ntohs(sin->sin_port));
+    char *rep = serializeMsg(TYPE_CLOSE, NULL);
+    sendto(p->sockfd, rep, strlen(rep), 0, p->address->ai_addr, p->address->ai_addrlen);
     return 0;
 }
 
 struct session *findSessionBySock(struct session **s, int sockfd) {
-    return 0;
+    struct session *p;
+    for (p=activeSessions; p!=NULL; p=p->nextSession) {
+        if (p->sockfd == sockfd) {
+            break;
+        }
+    }
+    return p;
 }
 struct session *findSessionByHost(struct session **s, char *host, char *port) {
-    return 0;
+    struct session *p;
+    struct sockaddr_in *sin;
+    char *in_host;
+    char *in_port;
+    int r;
+    for (p=activeSessions; p!=NULL; p=p->nextSession) {
+        sin = (struct sockaddr_in *)p->address->ai_addr;
+        in_host = inet_ntoa(sin->sin_addr);
+        r = sprintf(in_port, "%d", ntohs(sin->sin_port));
+        if (in_host == host && in_port == port) {
+            break;
+        }
+    }
+    return p;
 }
