@@ -549,26 +549,33 @@ struct session *findSessionBySock(struct session **s, int sockfd) {
 struct session *findSessionByHost(struct session **s, char *host, char *port) {
     struct session *p;
     struct sockaddr *sin;
-    char in_host[255];
-    memset(in_host, 0, 255);
-    char in_port[255];
-    memset(in_port, 0, 255);
+    // char in_host[255];
+    // memset(in_host, 0, 255);
+    char *in_host = malloc(sizeof(char)*50);
+    // char in_port[255];
+    // memset(in_port, 0, 255);
+    char *in_port = malloc(sizeof(char)*50);
     int r;
     for (p=*s; p!=NULL; p=p->nextSession) {
 
 
         // FIX
-        if(inet_ntop(p->address->ai_family, &(((struct sockaddr_in *)(p->address))->sin_addr), in_host, 255) == NULL) {
-            perror("inet_ntop");
+        // if(inet_ntop(p->address->ai_family, &(((struct sockaddr_in *)(p->address))->sin_addr), in_host, 255) == NULL) {
+        //     perror("inet_ntop");
+        //     continue;
+        // }
+
+        if(r = getnameinfo(p->address->ai_addr, p->address->ai_addrlen, in_host, sizeof(in_host), in_port, sizeof(in_port), NI_NUMERICHOST)) {
+            printf("getnameinfo: %s\n", gai_strerror(r));
             continue;
-        }
+        };
 
         // struct sockaddr *addr;
         // addr = p->address;
         // sin = (struct sockaddr_in *)addr->ai_addr;
         // in_host = inet_ntoa(sin->sin_addr);
         // in_host = addr->sa_data;
-        r = sprintf(in_port, "%d", ntohs(((struct sockaddr_in *)p->address->ai_addr)->sin_port));
+        // r = sprintf(in_port, "%d", ntohs(((struct sockaddr_in *)p->address->ai_addr)->sin_port));
         // if (in_host == host && in_port == port) {
             // break;
         // }
