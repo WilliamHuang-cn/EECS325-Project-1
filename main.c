@@ -32,15 +32,14 @@ struct session {
     struct addrinfo *address;
     // char *host;
     // char *port;
-    struct timeval lastUpdated;
+    struct timeval *lastUpdated;
     struct session *nextSession;
     int reqCount;
     int status;             // As defined above
 };
 
 // Saved sessions
-struct session _activeSessions;
-struct session *activeSessions = &_activeSessions;
+struct session *activeSessions = NULL;
 
 // Flag controlling main loop
 int volatile keepRunning = 1;
@@ -54,8 +53,8 @@ void terminateAllSessions();
 char *serializeMsg(int, char*);
 int unserializeMsg(char *, int *, char *);
 
-int createSock(char *, char *, struct addrinfo *, struct addrinfo *, int *);
-int createSockAndBind(char *, char *, struct addrinfo *, struct addrinfo *, int *);
+int createSock(char *, char *, struct addrinfo *, struct addrinfo **, int *);
+int createSockAndBind(char *, char *, struct addrinfo *, struct addrinfo **, int *);
 
 int newSession(struct session **, int, struct addrinfo *, struct timeval *, int);
 int removeSession(struct session **, int, struct session *);
@@ -109,7 +108,7 @@ int main(int argc, char *argv[]) {
     hint_local.ai_flags = AI_PASSIVE;        // Use local ip address
 
     // Server init with input argv[1] (listening port)
-    createSockAndBind(NULL, argv[1], &hint_local, serverInfo, &listen_sockfd);
+    createSockAndBind(NULL, argv[1], &hint_local, &serverInfo, &listen_sockfd);
     freeaddrinfo(serverInfo);
 
     printf("Listening on port: %s\n", argv[1]);
@@ -184,7 +183,7 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-                if((ret = createSock(host, port, &hint, res, &sockfd)) != 0) {
+                if((ret = createSock(host, port, &hint, &res, &sockfd)) != 0) {
                     res = NULL;
                     continue;
                 };
@@ -258,7 +257,7 @@ int main(int argc, char *argv[]) {
             char in_port[255];
             int r = sprintf(in_port, "%d", ntohs(sin->sin_port));
             printf("#session request from: %s %s\n", in_host, in_port);
-            if((ret = createSock(in_host, in_port, &hint, res, &sockfd)) != 0) {
+            if((ret = createSock(in_host, in_port, &hint, &res, &sockfd)) != 0) {
                 res = NULL;
                 continue;
             }
@@ -387,8 +386,9 @@ char *serializeMsg(int msg_type, char *msg) {
     char *type;
     sprintf(type, "%d", msg_type);
     strcpy(res, type);
+    // TODO put random int here
     strcat(res, "1234");
-    strcat(res, msg);
+    if (msg != NULL) strcat(res, msg);
     return res;
 }
 
@@ -418,22 +418,22 @@ int unserializeMsg(char *input, int *msg_type, char *msg) {
 }
 
 // Creates a socket. 
-int createSock(char *host, char *port, struct addrinfo *hint, struct addrinfo *res, int *sockfd) {
+int createSock(char *host, char *port, struct addrinfo *hint, struct addrinfo **res, int *sockfd) {
 
     int ret;
     struct addrinfo *p;
-    if ((ret = getaddrinfo(host, port, hint, &res))) {
+    if ((ret = getaddrinfo(host, port, hint, res))) {
         printf("Invalid address. Please try again. \n");
         puts(gai_strerror(ret));
         return 1;
     }
 
     // Open connection to server
-    for(p = res; p != NULL; p = p->ai_next) {
+    for(p = *res; p != NULL; p = p->ai_next) {
         if ((*sockfd = socket(p->ai_family, p->ai_socktype,p->ai_protocol)) == -1) {
             perror("talker: socket");
-            return 1;
-        }
+            continue;
+        } 
         break;
     }
     // No socket can be established
@@ -443,21 +443,21 @@ int createSock(char *host, char *port, struct addrinfo *hint, struct addrinfo *r
         return 1;
     }
 
-    res = p;
+    *res = p;
     return 0;
 }
 
 // Creates a socket and binds to port. 
-int createSockAndBind(char *host, char *port, struct addrinfo *hint, struct addrinfo *res, int *sockfd) {
+int createSockAndBind(char *host, char *port, struct addrinfo *hint, struct addrinfo **res, int *sockfd) {
     
     int ret;
     struct addrinfo *p;
-    if ((ret = getaddrinfo(host, port, hint, &res))) {
+    if ((ret = getaddrinfo(host, port, hint, res))) {
         printf("getaddrinfo: %s\n", gai_strerror(ret));
         return 1;       // Quit program with error
     }
 
-    for(p = res; p != NULL; p = p->ai_next) {
+    for(p = *res; p != NULL; p = p->ai_next) {
         // Try to create socket for addrinfo. Note that the sockets are non-blocking 
         if ((*sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
             perror("listener: socket");
@@ -479,7 +479,7 @@ int createSockAndBind(char *host, char *port, struct addrinfo *hint, struct addr
         return 1;
     }
 
-    res = p;
+    *res = p;
     return 0;
 }
 
@@ -489,9 +489,13 @@ int newSession(struct session **s, int sockfd, struct addrinfo *addr, struct tim
     new_session->sockfd = sockfd;
     new_session->address = addr;
     new_session->status = status;
-    new_session->lastUpdated = *time;
+    new_session->lastUpdated = NULL;
     new_session->nextSession = NULL;
 
+    if (*s == NULL) {
+        *s = new_session;
+        return 0;
+    }
     for (struct session *p=*s; p != NULL; p=p->nextSession) {
         if (p->nextSession == NULL) {
             p->nextSession = new_session;
@@ -544,15 +548,32 @@ struct session *findSessionBySock(struct session **s, int sockfd) {
 }
 struct session *findSessionByHost(struct session **s, char *host, char *port) {
     struct session *p;
-    struct sockaddr_in *sin;
-    char *in_host;
+    struct sockaddr *sin;
+    char in_host[255];
+    memset(in_host, 0, 255);
     char in_port[255];
+    memset(in_port, 0, 255);
     int r;
-    for (p=activeSessions; p!=NULL; p=p->nextSession) {
-        sin = (struct sockaddr_in *)p->address->ai_addr;
-        in_host = inet_ntoa(sin->sin_addr);
-        r = sprintf(in_port, "%d", ntohs(sin->sin_port));
-        if (in_host == host && in_port == port) {
+    for (p=*s; p!=NULL; p=p->nextSession) {
+
+
+        // FIX
+        if(inet_ntop(p->address->ai_family, &(((struct sockaddr_in *)(p->address))->sin_addr), in_host, 255) == NULL) {
+            perror("inet_ntop");
+            continue;
+        }
+
+        // struct sockaddr *addr;
+        // addr = p->address;
+        // sin = (struct sockaddr_in *)addr->ai_addr;
+        // in_host = inet_ntoa(sin->sin_addr);
+        // in_host = addr->sa_data;
+        r = sprintf(in_port, "%d", ntohs(((struct sockaddr_in *)p->address->ai_addr)->sin_port));
+        // if (in_host == host && in_port == port) {
+            // break;
+        // }
+
+        if (strcmp(host,in_host) == 0 && strcmp(port, in_port) == 0) {
             break;
         }
     }
